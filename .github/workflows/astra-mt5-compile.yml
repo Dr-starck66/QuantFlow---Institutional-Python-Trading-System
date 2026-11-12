@@ -6,6 +6,10 @@ on:
     paths:
       - "astra-mt5/**"
       - ".github/workflows/astra-mt5-compile.yml"
+  pull_request:
+    paths:
+      - "astra-mt5/**"
+      - ".github/workflows/astra-mt5-compile.yml"
   workflow_dispatch:
 permissions:
   contents: read
