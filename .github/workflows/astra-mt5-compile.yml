@@ -66,6 +66,59 @@ jobs:
           Copy-Item "$expertDir\*.log" "$env:GITHUB_WORKSPACE\astra-mt5\proofs" -ErrorAction SilentlyContinue
           Copy-Item "$expertDir\*.ex5" "$env:GITHUB_WORKSPACE\astra-mt5\proofs" -ErrorAction SilentlyContinue
           if($failed){exit 1}
+      - name: Attempt native MT5 real-tick broker test without account secrets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference="Stop"
+          $mt5=Join-Path $env:RUNNER_TEMP "ASTRA-MT5"
+          $terminal=Join-Path $mt5 "terminal64.exe"
+          $reports=Join-Path $mt5 "ASTRA_Reports"
+          $proofs=Join-Path $env:GITHUB_WORKSPACE "astra-mt5\proofs"
+          New-Item -ItemType Directory -Force -Path $reports,$proofs | Out-Null
+          "NO_BROKER_LOGIN_PROVIDED; native demo trial requested" | Out-File (Join-Path $proofs "tester-attempt.txt")
+          foreach($name in @("AstraGoldScalperSMC","AstraGoldATRRSIVWAP","AstraGoldICTSMC")){
+            $config=Get-Content "$env:GITHUB_WORKSPACE\astra-mt5\config\$name.ini" -Raw
+            $config=$config -replace '(?m)^FromDate=.*
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-mt5-native-compile
+          path: astra-mt5/proofs/
+          if-no-files-found: warn
+,'FromDate=2026.09.01'
+            $config=$config -replace '(?m)^ToDate=.*
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-mt5-native-compile
+          path: astra-mt5/proofs/
+          if-no-files-found: warn
+,'ToDate=2026.10.01'
+            $config=$config -replace '(?m)^Report=.*
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-mt5-native-compile
+          path: astra-mt5/proofs/
+          if-no-files-found: warn
+,("Report=ASTRA_Reports\"+$name)
+            $ini=Join-Path $mt5 ($name+".ini")
+            [IO.File]::WriteAllText($ini,$config,[Text.Encoding]::ASCII)
+            $report=Join-Path $reports ($name+".htm")
+            $p=Start-Process -FilePath $terminal -ArgumentList ('/portable /config:"{0}"' -f $ini) -PassThru
+            $done=$p.WaitForExit(120000)
+            if(-not $done){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+            for($i=0;$i -lt 5 -and -not(Test-Path $report);$i++){Start-Sleep -Seconds 2}
+            if(Test-Path $report){
+              $hash=(Get-FileHash $report -Algorithm SHA256).Hash
+              $length=(Get-Item $report).Length
+              "NATIVE_REPORT $name SHA256=$hash BYTES=$length" | Tee-Object -FilePath (Join-Path $proofs "tester-attempt.txt") -Append
+            }else{
+              "UNVERIFIED_NO_BROKER_REPORT $name terminalExit=$done" | Tee-Object -FilePath (Join-Path $proofs "tester-attempt.txt") -Append
+              # Avoid repeating a 2-minute timeout 3 times if not logged into a broker.
+              break
+            }
+          }
       - name: Upload EX5 binaries and real MetaEditor logs
         if: always()
         uses: actions/upload-artifact@v4
