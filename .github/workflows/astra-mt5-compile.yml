@@ -1,0 +1,71 @@
+name: ASTRA MT5 native MetaEditor compile (isolated)
+on:
+  push:
+    branches:
+      - astra/mt5-native-three-ea-20261112
+    paths:
+      - "astra-mt5/**"
+      - ".github/workflows/astra-mt5-compile.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-metaeditor:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install official MT5 silently and compile with native MetaEditor64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference="Stop"
+          $mt5=Join-Path $env:RUNNER_TEMP "ASTRA-MT5"
+          $setup=Join-Path $env:RUNNER_TEMP "mt5setup.exe"
+          New-Item -ItemType Directory -Force -Path $mt5 | Out-Null
+          Invoke-WebRequest "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile $setup
+          Start-Process -FilePath $setup -ArgumentList ('/auto /path:"{0}"' -f $mt5) -Wait
+          $editor=Join-Path $mt5 "metaeditor64.exe"
+          $terminal=Join-Path $mt5 "terminal64.exe"
+          $installed=$false
+          for($i=0;$i -lt 60;$i++){
+            if((Test-Path $editor) -and (Test-Path $terminal)){$installed=$true;break}
+            Start-Sleep -Seconds 3
+          }
+          if(-not $installed){throw "MT5 official installer did not deliver terminal64.exe + metaeditor64.exe"}
+          # Standard MQL5 headers unpack only after the terminal has launched once.
+          $proc=Start-Process -FilePath $terminal -ArgumentList "/portable" -PassThru
+          $stdheader=Join-Path $mt5 "MQL5\Include\Trade\Trade.mqh"
+          for($i=0;$i -lt 90;$i++){
+            if(Test-Path $stdheader){break}
+            Start-Sleep -Seconds 2
+          }
+          if($proc -and -not $proc.HasExited){Stop-Process -Id $proc.Id -Force}
+          if(-not(Test-Path $stdheader)){throw "MT5 standard library was not unpacked"}
+          $includeDir=Join-Path $mt5 "MQL5\Include"
+          $expertDir=Join-Path $mt5 "MQL5\Experts\ASTRA"
+          New-Item -ItemType Directory -Force -Path $expertDir | Out-Null
+          Copy-Item "$env:GITHUB_WORKSPACE\astra-mt5\MQL5\Include\ASTRA_MT5_Common.mqh" $includeDir -Force
+          Copy-Item "$env:GITHUB_WORKSPACE\astra-mt5\MQL5\Experts\*.mq5" $expertDir -Force
+          $failed=$false
+          foreach($src in @(Get-ChildItem "$expertDir\*.mq5")){
+             $args='/portable /compile:"{0}" /log' -f $src.FullName
+             $p=Start-Process -FilePath $editor -ArgumentList $args -Wait -PassThru
+             $exe=[IO.Path]::ChangeExtension($src.FullName, "ex5")
+             $log=[IO.Path]::ChangeExtension($src.FullName, "log")
+             if(Test-Path $log){Get-Content $log | Select-Object -Last 25 | Out-Host}
+             if(-not (Test-Path $exe)){
+               Write-Error "Compilation FAILED: $($src.Name) (no ex5)"
+               $failed=$true
+             }else{Write-Host "METAEDITOR_EX5_CREATED: $($src.Name)"}
+          }
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\astra-mt5\proofs" | Out-Null
+          Copy-Item "$expertDir\*.log" "$env:GITHUB_WORKSPACE\astra-mt5\proofs" -ErrorAction SilentlyContinue
+          Copy-Item "$expertDir\*.ex5" "$env:GITHUB_WORKSPACE\astra-mt5\proofs" -ErrorAction SilentlyContinue
+          if($failed){exit 1}
+      - name: Upload EX5 binaries and real MetaEditor logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-mt5-native-compile
+          path: astra-mt5/proofs/
+          if-no-files-found: warn
